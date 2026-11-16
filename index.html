@@ -176,6 +176,8 @@ nav.tabs button.on .bd{background:#fff;color:var(--hot)}
 @keyframes up{from{transform:translateY(40px);opacity:0}}
 @media(prefers-reduced-motion:reduce){.sheet,.done .cb{animation:none}}
 .sheet h3{margin:0 0 14px;font-size:24px;letter-spacing:-.02em}
+.sheet .xbtn{position:sticky;top:0;float:right;z-index:3;width:44px;height:44px;margin:-6px -6px 6px 10px;border-radius:50%;background:var(--card2);color:var(--ink);display:grid;place-items:center;box-shadow:0 0 0 1px var(--line),0 4px 12px rgba(0,0,0,.25)}
+.sheet .xbtn svg{width:20px;height:20px;stroke:currentColor;stroke-width:2.6;stroke-linecap:round;fill:none}
 .f{margin-bottom:14px}.f>label,.f>.lb{display:block;font-weight:700;font-size:14px;margin-bottom:6px}
 .two{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:10px}
 .pick{display:flex;flex-wrap:wrap;gap:6px}
@@ -710,7 +712,7 @@ function devicesSection() {
 function ago(ts) { const m = Math.round((Date.now() - ts) / 60000); if (m < 1) return "just now"; if (m < 60) return m + "m ago"; const h = Math.round(m / 60); if (h < 24) return h + "h ago"; return Math.round(h / 24) + "d ago"; }
 
 // ---------- sheets ----------
-function sheet(html) { $("#modal").innerHTML = `<div class="scrim" id="scrim"><div class="sheet" role="dialog" aria-modal="true">${html}</div></div>`; }
+function sheet(html) { const x = (mustPick && !me) ? "" : `<button class="xbtn" data-close aria-label="Close"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button>`; $("#modal").innerHTML = `<div class="scrim" id="scrim"><div class="sheet" role="dialog" aria-modal="true">${x}${html}</div></div>`; }
 function close() { if (mustPick && !me) return; $("#modal").innerHTML = ""; form = tform = cform = null; }
 let mustPick = false;
 function claim(n) {
