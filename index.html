@@ -124,6 +124,8 @@ h2 small{font-size:13px;color:var(--mute);font-weight:600}
 .row .tm{font-weight:800;white-space:nowrap;font-size:15px}
 .row .nm{font-weight:700;font-size:15px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .dots{display:flex;gap:3px;align-items:center}.dots i{width:10px;height:10px;border-radius:50%;background:var(--c)}
+.row .nm.two{display:flex;flex-direction:column;gap:2px;white-space:normal}.row .nm .nt{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dl{display:flex;gap:4px 10px;flex-wrap:wrap;font-size:12.5px;font-weight:700;color:var(--mute)}.dl em{font-style:normal;white-space:nowrap}.dl em b{color:var(--ink)}.dl em.o,.dl em.o b{color:var(--hot)}
 .ri{font-size:12px;font-weight:800;padding:3px 8px;border-radius:20px;white-space:nowrap}
 .ri.o{background:var(--hot);color:#fff}.ri.f{background:var(--card2);color:var(--mute)}
 .list{background:var(--card);border:1px solid var(--line);border-radius:var(--r);padding:6px}
@@ -620,7 +622,7 @@ function card(o, bad, past) {
 const mapUrl = p => "https://www.google.com/maps/search/?api=1&query=" + encodeURIComponent(p);
 function row(o, k, who) {
   const L = legsOf(o), op = L.filter(l => !l.driver).length, tm = evTeam(o.e), drv = who !== "all" && L.find(l => l.driver === who) && !(o.e.who || []).includes(who);
-  return `<button class="row" style="--t1:${tm ? tm.c1 : pc((o.e.who || [])[0])}" data-edit="${o.id}|${k}"><span class="tm">${drv ? plainM(L.find(l => l.driver === who).depart) : o.e.start ? plain(o.e.start) : "All day"}</span><span class="nm">${drv ? "Driving · " : ""}${esc(o.e.title)}</span><span class="dots">${(o.e.who || []).map(n => `<i style="--c:${pc(n)}"></i>`).join("")}${L.length ? `<span class="ri ${op ? "o" : "f"}">${op ? op + " open" : "rides ✓"}</span>` : ""}</span></button>`;
+  return `<button class="row" style="--t1:${tm ? tm.c1 : pc((o.e.who || [])[0])}" data-edit="${o.id}|${k}"><span class="tm">${drv ? plainM(L.find(l => l.driver === who).depart) : o.e.start ? plain(o.e.start) : "All day"}</span><span class="nm ${L.length ? "two" : ""}"><span class="nt">${drv ? "Driving · " : ""}${esc(o.e.title)}</span>${L.length ? `<span class="dl">${L.map(l => `<em class="${l.driver ? "" : "o"}">${l.k === "to" ? "Drop-off" : "Pick-up"} <b>${l.driver ? esc(l.driver) : "needs driver"}</b></em>`).join("")}</span>` : ""}</span><span class="dots">${(o.e.who || []).map(n => `<i style="--c:${pc(n)}"></i>`).join("")}</span></button>`;
 }
 function dinner(d) {
   const doc = S.dinner[d] || {}, home = FAM.filter(n => doc[n] === "home" || doc[n] === "late").length, lab = { home: "Home", late: "Late plate", out: "Out" };
@@ -629,14 +631,16 @@ function dinner(d) {
 function vRides() {
   const all = upcomingLegs(14), mine = all.filter(l => l.driver === me), open = all.filter(l => !l.driver);
   const list = rideF === "open" ? open : rideF === "mine" ? mine : all;
-  let h = `<h1>Rides</h1><p class="sub">Next two weeks · ${open.length} open · ${all.length} total</p>
+  let h = `<h1>Rides</h1><p class="sub">Next two weeks · ${open.length} open of ${all.length} · each event shows its drop-off and pick-up</p>
   <div class="seg">${[["open", "Needs a driver"], ["mine", "My drives"], ["all", "All"]].map(([k, l]) => `<button data-rf="${k}" class="${rideF === k ? "on" : ""}">${l}</button>`).join("")}</div>`;
   if (!list.length) return h + `<div class="empty"><b>${rideF === "open" ? "Every ride is covered" : rideF === "mine" ? (me ? "You're not driving anyone" : "Pick who you are first") : "No rides scheduled"}</b>${rideF === "open" ? "Nice work, team." : ""}</div>`;
-  let cur = "";
-  for (const l of list) {
-    if (l.o.d !== cur) { cur = l.o.d; h += `<div class="day ${cur === todayK() ? "td" : ""}"><span>${cur === todayK() ? "Today" : dayLabel(cur)}</span></div>`; }
-    const tm = evTeam(l.o.e), f = (l.o.e.who || [])[0];
-    h += `<div class="ev ${tm ? "th" : ""}" style="${tm ? tvars(tm) : `--t1:${pc(f)};--t2:${pc2(f)}`}">${tm ? badge(tm) : ""}<div class="t"><div>${fm(l.depart)}</div><div>leave</div></div><div class="b"><div class="ti">${esc(l.o.e.title)}</div>${tm ? `<div class="tname">${esc(tm.name)}</div>` : ""}<div class="ppl">${(l.o.e.who || []).map(chip).join("")}</div>${l.o.e.place ? `<div class="plc">${esc(l.o.e.place)}</div>` : ""}<div class="legs">${legBtn(l, false)}</div></div></div>`;
+  let cur = ""; const seen = new Set();
+  for (const l0 of list) {
+    const gk = l0.o.id + "|" + l0.o.d; if (seen.has(gk)) continue; seen.add(gk);
+    const o = l0.o, L = legsOf(o);
+    if (o.d !== cur) { cur = o.d; h += `<div class="day ${cur === todayK() ? "td" : ""}"><span>${cur === todayK() ? "Today" : dayLabel(cur)}</span></div>`; }
+    const tm = evTeam(o.e), f = (o.e.who || [])[0];
+    h += `<div class="ev ${tm ? "th" : ""}" style="${tm ? tvars(tm) : `--t1:${pc(f)};--t2:${pc2(f)}`}">${tm ? badge(tm) : ""}<div class="t"><div>${fmt(o.e.start)}</div>${o.e.end ? `<div>to ${fmt(o.e.end)}</div>` : ""}</div><div class="b"><button class="ti" data-edit="${o.id}|${o.d}">${esc(o.e.title)}</button>${tm ? `<div class="tname">${esc(tm.name)}</div>` : ""}<div class="ppl">${(o.e.who || []).map(chip).join("")}</div>${o.e.place ? `<div class="plc"><a class="map" href="${mapUrl(o.e.place)}" target="_blank" rel="noopener">${esc(o.e.place)}</a></div>` : ""}<div class="legs">${L.map(l => legBtn(l, false)).join("")}</div></div></div>`;
   }
   return h;
 }
