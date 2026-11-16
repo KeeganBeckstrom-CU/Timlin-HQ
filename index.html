@@ -195,6 +195,17 @@ nav.tabs button.on .bd{background:#fff;color:var(--hot)}
 .ck input{width:20px;height:20px}
 .steps{margin:0;padding-left:0;list-style:none;counter-reset:s;display:grid;gap:8px}.steps li{counter-increment:s;display:grid;grid-template-columns:34px 1fr;gap:10px;align-items:start;background:var(--card);border:1px solid var(--line);border-radius:16px;padding:10px 12px;font-weight:600}.steps li::before{content:counter(s);width:28px;height:28px;border-radius:50%;background:var(--grad);color:#fff;display:grid;place-items:center;font-weight:800}
 .hide{display:none!important}
+.toast{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(96px + env(safe-area-inset-bottom));z-index:60;background:var(--ink);color:var(--bg);border-radius:16px;padding:10px 10px 10px 16px;display:flex;gap:12px;align-items:center;font-weight:700;font-size:14.5px;box-shadow:0 10px 30px rgba(0,0,0,.45);width:max-content;max-width:calc(100% - 32px)}
+.toast span{flex:1;min-width:0}.toast button{flex:none;white-space:nowrap;background:var(--acc);color:#fff;border-radius:12px;padding:8px 14px;font-weight:800;min-height:38px}
+.qride{margin-top:8px;font-size:13px;font-weight:800;padding:7px 12px;border-radius:12px;background:var(--card2);color:var(--ink);min-height:36px}
+.qride b{color:var(--acc2)}
+a.btn{text-decoration:none}a.map{color:var(--mute);text-decoration:underline;text-decoration-color:var(--line);text-underline-offset:3px}
+.lnk{color:var(--acc2);font-weight:800;padding:0 2px}
+.pickd{position:relative;display:inline-flex;align-items:center;gap:4px;color:var(--acc2);font-weight:800;cursor:pointer}
+.pickd input{position:absolute;inset:0;opacity:0;width:100%;cursor:pointer}
+.chk{display:flex;gap:10px;align-items:center;background:var(--card2);border-radius:14px;padding:12px;font-weight:700;margin:4px 0 12px}
+.chk input{width:22px;height:22px;accent-color:var(--acc);flex:none}
+.seg.sm{margin-bottom:10px}.seg.sm button{min-height:36px;font-size:13.5px;padding:5px 13px}
 @media(max-width:600px){table{font-size:13px}}
 @media(max-width:440px){
   header{padding-inline:12px}
@@ -264,7 +275,10 @@ const devLabel = () => { const u = navigator.userAgent; const k = /iPhone/.test(
 const COLLS = Object.keys(S);
 let api = null, live = false, TM = null;
 let me = null; try { me = localStorage.getItem("bhq-me"); } catch (e) {}
-let tab = "today", rideF = "open", weekWho = "all";
+const pref = (k, d) => { try { return localStorage.getItem("bhq-" + k) || d; } catch (e) { return d; } };
+const setPref = (k, v) => { try { localStorage.setItem("bhq-" + k, v); } catch (e) {} };
+let tab = pref("tab", "today"), rideF = "open", weekWho = pref("ww", ""), todayWho = pref("tw", "all");
+if (!["today","rides","chores","week","house"].includes(tab)) tab = "today";
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const pad = n => String(n).padStart(2, "0");
@@ -387,10 +401,15 @@ function occ(d) {
   }
   return out.sort((a, b) => (mins(a.e.start) ?? 0) - (mins(b.e.start) ?? 0));
 }
+// can this person drive on this date? (Grayson's license lock is per-date, so February events already count him)
+const canDrive = (n, d) => driverList().includes(n) && !(locks()[n] && d < locks()[n]);
+// a kid-only event needs a ride both ways automatically; if a driver is going too, the kids ride with them
+const autoRide = (e, d) => (e.who || []).length > 0 && (e.who || []).every(n => !canDrive(n, d));
+const effRide = (e, d) => e.ride === "self" ? "none" : e.ride && e.ride !== "none" ? e.ride : autoRide(e, d) ? "both" : "none";
 const num = (v, dflt) => (v === "" || v == null || isNaN(+v)) ? dflt : +v;
 const timing = e => ({ early: num(e.early, EARLY[e.cat] ?? 10), travel: num(e.travel, num(places()[e.place], 15)) });
 function legsOf(o) {
-  const r = S.rides[o.id + "_" + o.d] || {}, n = o.e.ride || "none", L = [], { early, travel } = timing(o.e);
+  const r = S.rides[o.id + "_" + o.d] || {}, n = effRide(o.e, o.d), L = [], { early, travel } = timing(o.e);
   const s = mins(o.e.start), en = mins(o.e.end) ?? (s != null ? s + 60 : null);
   const drv = k => (k in r) ? r[k] : ((k === "to" ? o.e.driverTo : o.e.driverFrom) || "");
   if ((n === "to" || n === "both") && s != null) { const arrive = s - early; L.push({ o, k: "to", driver: drv("to"), depart: arrive - travel, arrive, home: arrive + travel, travel }); }
@@ -398,6 +417,16 @@ function legsOf(o) {
   return L;
 }
 const lk = l => l.o.id + l.o.d + l.k;
+const involves = (o, n) => (o.e.who || []).includes(n) || legsOf(o).some(l => l.driver === n);
+const needsRide = e => false; // rides are automatic now; the quick button stays for older one-off cases
+const norm = t => String(t || "").trim().toLowerCase();
+// every upcoming one-off event with the same title + people (imported calendars make these one per day)
+function series(id, from) {
+  const e = S.events[id]; if (!e) return [];
+  if (e.repeat === "weekly") return [id];
+  const w = (e.who || []).slice().sort().join();
+  return Object.entries(S.events).filter(([, x]) => x && x.repeat !== "weekly" && norm(x.title) === norm(e.title) && (x.who || []).slice().sort().join() === w && x.date >= (from || todayK())).map(([k]) => k);
+}
 const overlap = (a1, a2, b1, b2) => a1 < b2 && b1 < a2;
 function clashes(d) {
   const os = occ(d), legs = os.flatMap(legsOf).filter(l => l.driver), out = [], by = {};
@@ -506,7 +535,7 @@ function upcomingLegs(n) {
   return out.sort((a, b) => a.o.d === b.o.d ? a.depart - b.depart : a.o.d < b.o.d ? -1 : 1);
 }
 function legBtn(l, bad) {
-  const canTake = me && drivers().includes(me) && !l.driver;
+  const canTake = me && canDrive(me, l.o.d) && !l.driver;
   const who = l.driver ? (FAM.includes(l.driver) ? `${esc(l.driver)} ${av(l.driver, "sm")}` : `<span>${esc(l.driver)} <small style="color:var(--mute)">friend</small></span>`) : `<span class="need">Needs a driver</span>`;
   const line = l.k === "to"
     ? `Leave ${fm(l.depart)} → there ${fm(l.arrive)} · home ${fm(l.home)}`
@@ -549,15 +578,17 @@ function stats() {
   return `<div class="stats"><button class="stat" data-t="rides" data-rf2="mine"><b>${myDrives}</b><span>${isKid ? "Rides for me" : "My drives today"}</span></button><button class="stat" data-t="chores"><b>${myChores}</b><span>My chores left</span></button><button class="stat ${open ? "hot" : ""}" data-t="rides"><b>${open}</b><span>Rides need a driver</span></button></div>`;
 }
 function vToday() {
-  const t = todayK(), os = occ(sel), legs = os.flatMap(legsOf), open = legs.filter(l => !l.driver), cl = clashes(sel), bad = new Set(cl.flatMap(c => c.keys));
+  const t = todayK(), mineOnly = todayWho === "me" && me, os = occ(sel).filter(o => !mineOnly || involves(o, me)), legs = os.flatMap(legsOf), open = legs.filter(l => !l.driver), cl = clashes(sel), bad = new Set(cl.flatMap(c => c.keys));
   const isToday = sel === t, n = new Date(), nowM = n.getHours() * 60 + n.getMinutes();
   const title = isToday ? (me ? `${greet()}, ${esc(me)}` : greet()) : sel === addD(t, 1) ? "Tomorrow" : dayLabel(sel);
-  let h = `<h1>${title}</h1><p class="sub">${isToday ? dayLabel(sel) + " · " : ""}${os.length} thing${os.length === 1 ? "" : "s"} · ${legs.length} ride${legs.length === 1 ? "" : "s"}</p>`;
+  let h = `<h1>${title}</h1><p class="sub">${isToday ? dayLabel(sel) + " · " : ""}${os.length} thing${os.length === 1 ? "" : "s"} · ${legs.length} ride${legs.length === 1 ? "" : "s"} · ${isToday ? "" : `<button class="lnk" data-day="${t}">Back to today</button> · `}<label class="pickd">Pick a date<input type="date" id="jumpD" value="${sel}" aria-label="Jump to a date"></label></p>`;
   if (isToday && me) h += hero() + stats();
   h += strip(k => occ(k).length);
-  if (open.length) h += `<div class="alert need"><span>●</span><div>${open.length} ride${open.length > 1 ? "s need" : " needs"} a driver<ul>${open.map(l => `<li>${l.k === "to" ? "Drop-off" : "Pick-up"} ${esc(l.o.e.title)} — leave ${plainM(l.depart)} (${(l.o.e.who || []).join(", ")})</li>`).join("")}</ul></div></div>`;
+  if (me) h += `<div class="seg sm"><button data-tw="all" class="${!mineOnly ? "on" : ""}">Everyone</button><button data-tw="me" class="${mineOnly ? "on" : ""}">${av(me)}Just me</button></div>`;
+  if (open.length > 2) h += `<div class="alert need"><span>●</span><div>${open.length} rides need a driver${isToday || sel > t ? ` — tap <b>I'll drive</b> on any red one below, or see them all in <button class="lnk" data-t="rides" data-rf2="open">Rides</button>` : ""}</div></div>`;
+  else if (open.length) h += `<div class="alert need"><span>●</span><div>${open.length} ride${open.length > 1 ? "s need" : " needs"} a driver<ul>${open.map(l => `<li>${l.k === "to" ? "Drop-off" : "Pick-up"} ${esc(l.o.e.title)} — leave ${plainM(l.depart)} (${(l.o.e.who || []).join(", ")})</li>`).join("")}</ul></div></div>`;
   if (cl.length) h += `<div class="alert clash"><span>▲</span><div>Heads up<ul>${cl.map(c => `<li>${esc(c.msg)}</li>`).join("")}</ul></div></div>`;
-  if (!os.length) h += Object.keys(S.events).length ? `<div class="empty"><b>Nothing scheduled</b>A free day. Tap + to add something.</div>` : emptyStart();
+  if (!os.length) h += Object.keys(S.events).length ? `<div class="empty"><b>${mineOnly ? "Nothing for you" : "Nothing scheduled"}</b>${mineOnly ? `<button class="lnk" data-tw="all">See everyone's day</button>` : "A free day. Tap + to add something."}</div>` : emptyStart();
   else {
     let placed = !isToday, tl = "";
     os.forEach(o => { const end = mins(o.e.end) ?? (mins(o.e.start) ?? 0) + 60; const past = isToday && end < nowM;
@@ -566,8 +597,10 @@ function vToday() {
     if (!placed) tl += `<div class="now">Now · ${plainM(nowM)}</div>`;
     h += `<div class="tl">${tl}</div>`;
   }
-  const ch = choresOn(sel);
+  const ch = choresOn(sel).filter(x => !mineOnly || x.who === me);
   if (ch.length) { const log = S.chorelog[sel] || {}; h += `<h2>Chores <small>${ch.filter(x => log[x.key]).length} of ${ch.length} done</small></h2>` + choreList(sel, ch); }
+  if (isToday && n.getHours() >= 16) { const tk = addD(t, 1), tos = occ(tk).filter(o => !mineOnly || involves(o, me));
+    h += `<h2>Tomorrow <small>${tos.length ? tos.length + " thing" + (tos.length === 1 ? "" : "s") : "free"}</small></h2>` + (tos.length ? tos.map(o => row(o, tk, mineOnly ? me : "all")).join("") : `<div class="row" style="color:var(--mute);grid-template-columns:1fr">Nothing on the calendar</div>`); }
   return h;
 }
 function emptyStart() {
@@ -581,8 +614,13 @@ function card(o, bad, past) {
   <div class="b"><button class="ti" data-edit="${o.id}|${o.d}">${esc(e.title)}${e.repeat === "weekly" ? `<span class="tag">Weekly</span>` : ""}${e.sample ? `<span class="tag">Example</span>` : ""}</button>
   ${tm ? `<div class="tname">${esc(tm.name)}</div>` : ""}
   <div class="ppl">${(e.who || []).map(chip).join("")}</div>
-  ${e.place ? `<div class="plc">${esc(e.place)} · ${travel} min drive</div>` : ""}${e.notes ? `<div class="plc">${esc(e.notes)}</div>` : ""}
-  ${getThere}${L.length ? `<div class="legs">${L.map(l => legBtn(l, bad.has(lk(l)))).join("")}</div>` : ""}</div></div>`;
+  ${e.place ? `<div class="plc"><a class="map" href="${mapUrl(e.place)}" target="_blank" rel="noopener">${esc(e.place)}</a> · ${travel} min drive</div>` : ""}${e.notes ? `<div class="plc">${esc(e.notes)}</div>` : ""}
+  ${getThere}${L.length ? `<div class="legs">${L.map(l => legBtn(l, bad.has(lk(l)))).join("")}</div>` : !past && s != null && needsRide(e) ? `<button class="qride" data-qride="${o.id}|${o.d}"><b>+</b> Needs a ride?</button>` : ""}</div></div>`;
+}
+const mapUrl = p => "https://www.google.com/maps/search/?api=1&query=" + encodeURIComponent(p);
+function row(o, k, who) {
+  const L = legsOf(o), op = L.filter(l => !l.driver).length, tm = evTeam(o.e), drv = who !== "all" && L.find(l => l.driver === who) && !(o.e.who || []).includes(who);
+  return `<button class="row" style="--t1:${tm ? tm.c1 : pc((o.e.who || [])[0])}" data-edit="${o.id}|${k}"><span class="tm">${drv ? plainM(L.find(l => l.driver === who).depart) : o.e.start ? plain(o.e.start) : "All day"}</span><span class="nm">${drv ? "Driving · " : ""}${esc(o.e.title)}</span><span class="dots">${(o.e.who || []).map(n => `<i style="--c:${pc(n)}"></i>`).join("")}${L.length ? `<span class="ri ${op ? "o" : "f"}">${op ? op + " open" : "rides ✓"}</span>` : ""}</span></button>`;
 }
 function dinner(d) {
   const doc = S.dinner[d] || {}, home = FAM.filter(n => doc[n] === "home" || doc[n] === "late").length, lab = { home: "Home", late: "Late plate", out: "Out" };
@@ -627,8 +665,10 @@ function vChores() {
   return h;
 }
 function vWeek() {
+  if (!weekWho) weekWho = me || "all";
   const start = addD(sel, -parse(sel).getDay());
-  let h = `<h1>Week of ${MON[parse(start).getMonth()]} ${parse(start).getDate()}</h1><div class="strip" style="grid-template-columns:44px minmax(0,1fr) 44px"><button class="nav" data-go="-7" aria-label="Previous week">‹</button><button class="d" data-day="${todayK()}">Jump to this week</button><button class="nav" data-go="7" aria-label="Next week">›</button></div>
+  let h = `<h1>Week of ${MON[parse(start).getMonth()]} ${parse(start).getDate()}</h1><div class="strip" style="grid-template-columns:44px minmax(0,1fr) 44px"><button class="nav" data-go="-7" aria-label="Previous week">‹</button><button class="d" data-day="${todayK()}" style="position:relative">${start === wkStart(todayK()) ? "This week" : "Back to this week"}</button><button class="nav" data-go="7" aria-label="Next week">›</button></div>
+  <p class="sub" style="margin:-4px 0 10px"><label class="pickd">Jump to a date<input type="date" id="jumpD" value="${sel}" aria-label="Jump to a date"></label></p>
   <div class="seg"><button data-ww="all" class="${weekWho === "all" ? "on" : ""}">Everyone</button>${FAM.map(n => `<button data-ww="${n}" class="${weekWho === n ? "on" : ""}">${av(n)}${n}</button>`).join("")}</div>`;
   let any = false;
   for (let i = 0; i < 7; i++) {
@@ -636,8 +676,7 @@ function vWeek() {
     h += `<div class="day ${k === todayK() ? "td" : ""}"><span>${dayLabel(k)}</span><span>${os.length || ""}</span></div>`;
     if (!os.length) { h += `<div class="row" style="color:var(--mute);grid-template-columns:1fr">Free</div>`; continue; }
     any = true;
-    h += os.map(o => { const L = legsOf(o), op = L.filter(l => !l.driver).length, tm = evTeam(o.e), drv = weekWho !== "all" && L.find(l => l.driver === weekWho) && !(o.e.who || []).includes(weekWho);
-      return `<button class="row" style="--t1:${tm ? tm.c1 : pc((o.e.who || [])[0])}" data-edit="${o.id}|${k}"><span class="tm">${drv ? plainM(L.find(l => l.driver === weekWho).depart) : o.e.start ? plain(o.e.start) : "All day"}</span><span class="nm">${drv ? "Driving · " : ""}${esc(o.e.title)}</span><span class="dots">${(o.e.who || []).map(n => `<i style="--c:${pc(n)}"></i>`).join("")}${L.length ? `<span class="ri ${op ? "o" : "f"}">${op ? op + " open" : "rides ✓"}</span>` : ""}</span></button>`; }).join("");
+    h += os.map(o => row(o, k, weekWho)).join("");
   }
   return h + (any || Object.keys(S.events).length ? "" : emptyStart());
 }
@@ -681,7 +720,13 @@ function checkDevice() {
   if (!d) { claim(me); return; }               // first run after this update: register this phone
   if (d.reset || d.who !== me) { me = null; try { localStorage.removeItem("bhq-me"); } catch (e) {} if (!$("#modal").innerHTML) whoSheet(); }
 }
-let flashT;
+let flashT, undoT;
+function undo(msg, fn) {
+  clearTimeout(undoT); $("#toast")?.remove();
+  document.body.insertAdjacentHTML("beforeend", `<div class="toast" id="toast" role="status"><span>${esc(msg)}</span><button id="undoB">Undo</button></div>`);
+  $("#undoB").onclick = () => { fn(); $("#toast")?.remove(); };
+  undoT = setTimeout(() => $("#toast")?.remove(), 6000);
+}
 function flash(msg) { setSync(live, msg); clearTimeout(flashT); flashT = setTimeout(() => setSync(live, live ? "Live · shared" : "This phone only"), 4000); }
 function whoSheet() {
   if (me) { sheet(`<h3>This phone is ${esc(me)}'s</h3><div style="display:flex;align-items:center;gap:12px;margin-bottom:14px">${av(me)}<p class="sub" style="margin:0">Each phone stays with one person so drives, chores and points stay straight. If this is the wrong person, ask ${ADMIN} to reset it from House.</p></div><div class="acts"><button class="btn" data-close>Got it</button></div>`); return; }
@@ -701,11 +746,11 @@ function editSheet(id, d) {
   drawForm();
 }
 function drawForm() {
-  const f = form, dr = drivers(), tms = teams(), rideOpt = [["none", "No ride"], ["to", "Drop-off"], ["from", "Pick-up"], ["both", "Both ways"]];
-  const drvSel = (name, v) => { const custom = v === "__custom" || (v && !FAM.includes(v)); return `<select id="${name}"><option value="">Needs a driver</option>${dr.map(n => `<option ${v === n ? "selected" : ""}>${n}</option>`).join("")}${lockedDrivers().map(n => `<option disabled>${n} — can drive ${lockLabel(n)}</option>`).join("")}<option value="__custom" ${custom ? "selected" : ""}>Someone else (friend)…</option></select>${custom ? `<input type="text" id="${name}c" style="margin-top:6px" placeholder="Who's driving? e.g. Tyler's mom" value="${v === "__custom" ? "" : esc(v)}">` : ""}`; };
+  const f = form, dr = driverList().filter(n => canDrive(n, f.date)), tms = teams(), rideOpt = [["none", autoRide(f, f.date) ? "Automatic — both ways (kids only)" : "Automatic — none (a driver is going)"], ["self", "No ride needed"], ["to", "Just drop-off"], ["from", "Just pick-up"], ["both", "Both ways"]];
+  const drvSel = (name, v) => { const custom = v === "__custom" || (v && !FAM.includes(v)); return `<select id="${name}"><option value="">Needs a driver</option>${dr.map(n => `<option ${v === n ? "selected" : ""}>${n}</option>`).join("")}${driverList().filter(n => !canDrive(n, f.date)).map(n => `<option disabled>${n} — can drive ${lockLabel(n)}</option>`).join("")}<option value="__custom" ${custom ? "selected" : ""}>Someone else (friend)…</option></select>${custom ? `<input type="text" id="${name}c" style="margin-top:6px" placeholder="Who's driving? e.g. Tyler's mom" value="${v === "__custom" ? "" : esc(v)}">` : ""}`; };
   const tm = tms[f.team];
   sheet(`<h3>${f._id ? "Edit" : "Add to the schedule"}</h3>
-  <div class="f"><label for="fT">What</label><input type="text" id="fT" value="${esc(f.title)}" placeholder="Baseball practice, work, dentist…"></div>
+  <div class="f"><label for="fT">What</label><input type="text" id="fT" list="tlist" value="${esc(f.title)}" placeholder="Baseball practice, work, dentist…" autocomplete="off"><datalist id="tlist">${[...new Set(Object.values(S.events).filter(x => x && x.title).map(x => x.title))].sort().map(x => `<option value="${esc(x)}">`).join("")}</datalist>${f._id ? "" : `<p class="ex" style="margin:4px 0 0">Pick something you've added before and the rest fills itself in.</p>`}</div>
   <div class="f"><span class="lb">Who</span><div class="pick">${FAM.map(n => `<button type="button" data-fw="${n}" class="${f.who.includes(n) ? "on" : ""}">${av(n)}${n}</button>`).join("")}</div></div>
   <div class="two"><div class="f"><label for="fC">Type</label><select id="fC">${CATS.map(c => `<option ${f.cat === c ? "selected" : ""}>${c}</option>`).join("")}</select></div>
   <div class="f"><label for="fTeam">Team look</label><select id="fTeam"><option value="">No team</option>${Object.entries(tms).map(([k, t]) => `<option value="${k}" ${f.team === k ? "selected" : ""}>${esc(t.name)}</option>`).join("")}</select></div></div>
@@ -719,12 +764,12 @@ function drawForm() {
   <div class="f"><label for="fEa">Arrive early (min)</label><input type="number" inputmode="numeric" id="fEa" min="0" max="180" value="${f.early}" placeholder="${EARLY[f.cat] ?? 10}"></div></div>
   <p class="ex" style="margin:-6px 0 12px">Leave time = start − arrive early − drive time. Drive times are remembered for each place.</p>
   <div class="f"><label for="fRide">Needs a ride?</label><select id="fRide">${rideOpt.map(([k, l]) => `<option value="${k}" ${f.ride === k ? "selected" : ""}>${l}</option>`).join("")}</select></div>
-  ${f.ride === "to" || f.ride === "both" || f.ride === "from" ? `<div class="two">${f.ride !== "from" ? `<div class="f"><label for="fDT">${f.repeat === "weekly" ? "Usual drop-off" : "Drop-off driver"}</label>${drvSel("fDT", f.driverTo)}</div>` : ""}${f.ride !== "to" ? `<div class="f"><label for="fDF">${f.repeat === "weekly" ? "Usual pick-up" : "Pick-up driver"}</label>${drvSel("fDF", f.driverFrom)}</div>` : ""}</div>` : ""}
-  ${f.repeat === "weekly" && f.ride !== "none" ? `<p class="ex" style="margin:-6px 0 12px">Anyone can still swap the driver for a single day from the ride itself.</p>` : ""}
+  ${(() => { const er = effRide(f, f.date); return er !== "none" ? `<div class="two">${er !== "from" ? `<div class="f"><label for="fDT">${f.repeat === "weekly" ? "Usual drop-off" : "Drop-off driver"}</label>${drvSel("fDT", f.driverTo)}</div>` : ""}${er !== "to" ? `<div class="f"><label for="fDF">${f.repeat === "weekly" ? "Usual pick-up" : "Pick-up driver"}</label>${drvSel("fDF", f.driverFrom)}</div>` : ""}</div>` : ""; })()}
+  ${f.repeat === "weekly" && effRide(f, f.date) !== "none" ? `<p class="ex" style="margin:-6px 0 12px">Anyone can still swap the driver for a single day from the ride itself.</p>` : ""}
   <div class="f"><label for="fN">Notes</label><textarea id="fN" placeholder="Bring catcher's gear, gate code 4412…">${esc(f.notes)}</textarea></div>
   <p class="ex hide" id="fErr" style="color:var(--acc);font-weight:700">Add a name, a start time and at least one person.</p>
   <div class="acts"><button class="btn acc" data-save>Save</button><button class="btn ghost" data-close>Cancel</button></div>
-  ${f._id ? `<div class="acts">${f.repeat === "weekly" ? `<button class="btn ghost" data-skip>Skip just ${dayLabel(f._d)}</button>` : ""}<button class="btn red" data-delev>Delete${f.repeat === "weekly" ? " every week" : ""}</button></div>` : ""}`);
+  ${f._id ? `<div class="acts">${f.repeat === "weekly" ? `<button class="btn ghost" data-skip>Skip just ${dayLabel(f._d)}</button>` : ""}<button class="btn ghost" data-dup>Duplicate</button><button class="btn red" data-delev>Delete${f.repeat === "weekly" ? " every week" : ""}</button></div>` : ""}`);
 }
 function grab() {
   const v = id => { const el = $("#" + id); return el ? el.value : undefined; }, f = form;
@@ -739,9 +784,33 @@ function legSheet(id, d, k) {
   const e = S.events[id]; if (!e) return;
   const l = legsOf({ id, e, d }).find(x => x.k === k); if (!l) return;
   sheet(`<h3>${k === "to" ? "Drop-off" : "Pick-up"} · leave ${plainM(l.depart)}</h3><p class="sub">${esc(e.title)} · ${(e.who || []).join(", ")} · ${dayLabel(d)}<br>${k === "to" ? `There by ${plainM(l.arrive)}` : `Pick up at ${plainM(l.arrive)}`} · back home ${plainM(l.home)}${e.place ? "<br>" + esc(e.place) : ""}</p>
-  <div class="f"><span class="lb">Who's driving${e.repeat === "weekly" ? " this day" : ""}?</span><div class="who">${drivers().map(n => `<button data-setdrv="${id}|${d}|${k}|${n}" style="${l.driver === n ? "box-shadow:inset 0 0 0 2px var(--ink)" : ""}">${av(n)}${n}</button>`).join("")}${lockedDrivers().map(n => `<button disabled class="lockd">${av(n)}<span>${n}<small style="display:block;margin:0">Can drive ${lockLabel(n)}</small></span></button>`).join("")}</div></div>
+  <div class="f"><span class="lb">Who's driving${e.repeat === "weekly" ? " this day" : ""}?</span><div class="who">${driverList().filter(n => canDrive(n, d)).map(n => `<button data-setdrv="${id}|${d}|${k}|${n}" style="${l.driver === n ? "box-shadow:inset 0 0 0 2px var(--ink)" : ""}">${av(n)}${n}</button>`).join("")}${driverList().filter(n => !canDrive(n, d)).map(n => `<button disabled class="lockd">${av(n)}<span>${n}<small style="display:block;margin:0">Can drive ${lockLabel(n)}</small></span></button>`).join("")}</div></div>
   <div class="f"><label for="cdrv">Friend or someone else driving</label><div class="add" style="margin:0"><input type="text" id="cdrv" placeholder="Tyler's mom, Coach Mike…" value="${l.driver && !FAM.includes(l.driver) ? esc(l.driver) : ""}"><button class="btn" data-setcustom="${id}|${d}|${k}">Set</button></div></div>
-  <div class="acts">${l.driver ? `<button class="btn ghost" data-setdrv="${id}|${d}|${k}|">Nobody yet — needs a driver</button>` : ""}<button class="btn ghost" data-close>Done</button></div>`);
+  ${(() => { const n = sameDay(id, d).length; return n > 1 ? `<label class="chk"><input type="checkbox" id="allSeries"> Same driver for every ${esc(e.title)} on ${DOW[parse(d).getDay()]}s (${n})</label>` : ""; })()}
+  <div class="acts">${e.place ? `<a class="btn ghost" style="display:grid;place-items:center" href="${mapUrl(e.place)}" target="_blank" rel="noopener">Directions</a>` : ""}${l.driver ? `<button class="btn ghost" data-setdrv="${id}|${d}|${k}|">Nobody yet — needs a driver</button>` : ""}<button class="btn ghost" data-close>Done</button></div>`);
+}
+// one-off events with the same title/people on the same weekday, from d on (weekly events: every upcoming week)
+function sameDay(id, d) {
+  const e = S.events[id]; if (!e) return [];
+  const dow = parse(d).getDay();
+  if (e.repeat === "weekly") { const out = []; for (let x = d; out.length < 60 && (!e.until || x <= e.until) && x <= addD(d, 400); x = addD(x, 7)) if (!(e.skip || []).includes(x)) out.push([id, x]); return out; }
+  return series(id, d).filter(k => parse(S.events[k].date).getDay() === dow).map(k => [k, S.events[k].date]);
+}
+function setDriverAll(id, d, k, n) {
+  const all = $("#allSeries") && $("#allSeries").checked ? sameDay(id, d) : [[id, d]];
+  const e = S.events[id];
+  if (all.length > 1 && e && e.repeat === "weekly") { put("events", id, {...e, [k === "to" ? "driverTo" : "driverFrom"]: n}); Object.keys(S.rides).forEach(rk => { if (rk.startsWith(id + "_") && rk.slice(id.length + 1) >= d && S.rides[rk] && k in S.rides[rk]) { const r = {...S.rides[rk]}; delete r[k]; put("rides", rk, r); } }); }
+  else all.forEach(([i, x]) => setDriver(i, x, k, n));
+  if (all.length > 1) flash(`Set for ${all.length} ${DOW[parse(d).getDay()]}s`);
+}
+function rideSheet(id, d) {
+  const e = S.events[id]; if (!e) return;
+  const n = series(id, d).length;
+  sheet(`<h3>Ride for ${esc(e.title)}</h3><p class="sub">${(e.who || []).join(", ")} · ${dayLabel(d)}${e.start ? " · " + plain(e.start) + (e.end ? "–" + plain(e.end) : "") : ""}</p>
+  ${n > 1 ? `<label class="chk"><input type="checkbox" id="rAll" checked> All ${n} upcoming ${esc(e.title)} for ${(e.who || []).join(" & ")}</label>` : ""}
+  <div class="who" style="grid-template-columns:1fr">${[["both", "Drop-off and pick-up"], ["to", "Just drop-off"], ["from", "Just pick-up"]].map(([v, l]) => `<button data-qr="${id}|${d}|${v}" style="justify-content:flex-start;padding-left:16px">${l}</button>`).join("")}</div>
+  <p class="ex">Leave times are worked out from the start time, drive time and how early they need to be there. Anyone who drives can claim it.</p>
+  <div class="acts"><button class="btn ghost" data-close>Cancel</button></div>`);
 }
 function setDriver(id, d, k, n) { const rk = id + "_" + d, cur = S.rides[rk] || {}; put("rides", rk, {...cur, [k]: n}); }
 
@@ -884,14 +953,18 @@ document.addEventListener("click", ev => {
   const D = t.dataset;
   if (D.take) { ev.stopPropagation(); const [id, d, k] = D.take.split("|"); setDriver(id, d, k, me); return; }
   if (D.rf2) rideF = D.rf2;
-  if (D.t) { tab = D.t; window.scrollTo && window.scrollTo(0, 0); render(); return; }
+  if (D.t) { tab = D.t; setPref("tab", tab); window.scrollTo && window.scrollTo(0, 0); render(); return; }
+  if (D.tw) { todayWho = D.tw; setPref("tw", todayWho); render(); return; }
+  if (D.qride) { const [id, d] = D.qride.split("|"); rideSheet(id, d); return; }
+  if (D.qr) { const [id, d, v] = D.qr.split("|"), ids = $("#rAll") && $("#rAll").checked ? series(id, d) : [id]; ids.forEach(i => put("events", i, {...S.events[i], ride: v})); close(); flash(ids.length > 1 ? `Rides added to ${ids.length} events` : "Ride added — anyone can claim it"); return; }
+  if (D.dup !== undefined) { grab(); form._id = null; form._auto = false; form.skip = []; drawForm(); flash("Copy — change the date or time and save"); return; }
   if (D.day) { sel = D.day; if (tab === "rides" || tab === "house") tab = "today"; render(); return; }
   if (D.go) { sel = addD(sel, +D.go); render(); return; }
   if (D.rf) { rideF = D.rf; render(); return; }
-  if (D.ww) { weekWho = D.ww; render(); return; }
+  if (D.ww) { weekWho = D.ww; setPref("ww", weekWho); render(); return; }
   if (D.leg) { const [id, d, k] = D.leg.split("|"); legSheet(id, d, k); return; }
-  if (D.setcustom) { const [id, d, k] = D.setcustom.split("|"), n = ($("#cdrv").value || "").replace(/\|/g, "/").trim(); if (n) { setDriver(id, d, k, n); close(); } return; }
-  if (D.setdrv !== undefined) { const [id, d, k, n] = D.setdrv.split("|"); setDriver(id, d, k, n); close(); return; }
+  if (D.setcustom) { const [id, d, k] = D.setcustom.split("|"), n = ($("#cdrv").value || "").replace(/\|/g, "/").trim(); if (n) { setDriverAll(id, d, k, n); close(); } return; }
+  if (D.setdrv !== undefined) { const [id, d, k, n] = D.setdrv.split("|"); setDriverAll(id, d, k, n); close(); return; }
   if (D.edit) { const [id, d] = D.edit.split("|"); editSheet(id, d); return; }
   if (D.add !== undefined) { editSheet(null, sel); return; }
   if (t.id === "fab") { tab === "chores" ? choreSheet(null) : editSheet(null, sel); return; }
@@ -904,9 +977,9 @@ document.addEventListener("click", ev => {
   if (D.iam) { if (!me) { claim(D.iam); } $("#modal").innerHTML = ""; render(); return; }
   if (D.din) { const doc = {...(S.dinner[sel] || {})}, nx = { "": "home", home: "late", late: "out", out: "" }; doc[D.din] = nx[doc[D.din] || ""]; if (!doc[D.din]) delete doc[D.din]; put("dinner", sel, doc); return; }
   if (D.gt) { const x = S.grocery[D.gt]; if (x) put("grocery", D.gt, {...x, done: !x.done}); return; }
-  if (D.gd) { del("grocery", D.gd); return; }
-  if (D.gclear !== undefined) { Object.entries(S.grocery).forEach(([id, x]) => x.done && del("grocery", id)); return; }
-  if (D.nd) { del("notes", D.nd); return; }
+  if (D.gd) { const x = S.grocery[D.gd], id = D.gd; del("grocery", id); if (x) undo(`Removed ${x.text}`, () => put("grocery", id, x)); return; }
+  if (D.gclear !== undefined) { const gone = Object.entries(S.grocery).filter(([, x]) => x.done); gone.forEach(([id]) => del("grocery", id)); undo(`Cleared ${gone.length} item${gone.length === 1 ? "" : "s"}`, () => gone.forEach(([id, x]) => put("grocery", id, x))); return; }
+  if (D.nd) { const x = S.notes[D.nd], id = D.nd; del("notes", id); if (x) undo("Note deleted", () => put("notes", id, x)); return; }
   if (D.pd) { const p = {...places()}; delete p[D.pd]; put("settings", "main", {...main(), places: p}); return; }
   if (D.drv) { const cur = drivers(), n = cur.includes(D.drv) ? cur.filter(x => x !== D.drv) : [...cur, D.drv]; put("settings", "main", {...main(), drivers: n}); return; }
   if (D.applogox !== undefined) { const m = {...main()}; delete m.logo; put("settings", "main", m); return; }
@@ -945,20 +1018,22 @@ document.addEventListener("click", ev => {
     grab(); const f = form;
     if (!f.title.trim() || !f.who.length || !f.start || (f.repeat === "weekly" && !f.days.length)) { $("#fErr").classList.remove("hide"); return; }
     const id = f._id || uid("e"), out = {...f, title: f.title.trim(), travel: f.travel === "" ? "" : +f.travel, early: f.early === "" ? "" : +f.early};
-    delete out._id; delete out._d; delete out._auto; delete out.leave;
+    delete out._id; delete out._d; delete out._auto; delete out.leave; delete out._tpl; delete out.src;
     if (out.driverTo === "__custom") out.driverTo = ""; if (out.driverFrom === "__custom") out.driverFrom = "";
-    if (out.ride === "none" || out.ride === "from") out.driverTo = "";
-    if (out.ride === "none" || out.ride === "to") out.driverFrom = "";
+    const er = effRide(out, out.date);
+    if (er === "none" || er === "from") out.driverTo = "";
+    if (er === "none" || er === "to") out.driverFrom = "";
     if (out.repeat !== "weekly") { out.days = []; out.until = ""; }
     put("events", id, out);
     if (out.place && out.travel !== "" && places()[out.place] !== out.travel) put("settings", "main", {...main(), places: {...places(), [out.place]: out.travel}});
     if (!f._id) sel = out.date; close(); return;
   }
-  if (D.skip !== undefined) { const e = S.events[form._id]; put("events", form._id, {...e, skip: [...(e.skip || []), form._d]}); close(); return; }
-  if (D.delev !== undefined) { if (t.dataset.sure) { del("events", form._id); close(); return; } t.dataset.sure = "1"; t.textContent = "Tap again to delete for good"; return; }
+  if (D.skip !== undefined) { const id = form._id, e = S.events[id], d = form._d; put("events", id, {...e, skip: [...(e.skip || []), d]}); close(); undo(`Skipped ${e.title} on ${dayLabel(d)}`, () => put("events", id, e)); return; }
+  if (D.delev !== undefined) { const id = form._id, e = S.events[id]; del("events", id); close(); undo(`Deleted ${e.title}`, () => put("events", id, e)); return; }
 });
 document.addEventListener("change", async ev => {
   const id = ev.target.id;
+  if (id === "jumpD" && ev.target.value) { sel = ev.target.value; render(); return; }
   if (cform && id === "cR") { grabChore(); drawChore(); }
   if (form && ["fR", "fRide", "fTeam", "fC", "fDT", "fDF"].includes(id)) { if (id === "fTeam") form._auto = false; grab(); if (id === "fC" && form._auto) form.team = autoTeam(form); drawForm(); }
   if (id === "appLogo" && ev.target.files[0]) {
@@ -971,6 +1046,10 @@ document.addEventListener("change", async ev => {
   }
 });
 document.addEventListener("input", ev => {
+  if (form && !form._id && ev.target.id === "fT") {
+    const v = norm(ev.target.value), tpl = v && Object.values(S.events).filter(x => x && norm(x.title) === v).sort((a, b) => (b.date || "").localeCompare(a.date || ""))[0];
+    if (tpl && form._tpl !== v) { grab(); form._tpl = v; ["title", "who", "cat", "start", "end", "place", "ride", "driverTo", "driverFrom", "travel", "early", "team", "notes"].forEach(k => { if (tpl[k] !== undefined) form[k] = JSON.parse(JSON.stringify(tpl[k])); }); form._auto = false; drawForm(); flash("Filled in from last time"); }
+  }
   if (form && ev.target.id === "fP") { const m = places()[ev.target.value.trim()], tr = $("#fTr"); if (m != null && tr && !tr.value) tr.value = m; }
 });
 document.addEventListener("mousedown", ev => { if (ev.target.id === "scrim") close(); });
@@ -981,9 +1060,17 @@ document.addEventListener("submit", ev => {
   if (ev.target.id === "nAdd") { const v = $("#nIn").value.trim(); if (v) put("notes", uid("n"), { text: v, by: me || "", ts: Date.now() }); }
 });
 
+let tx = null;
+document.addEventListener("touchstart", ev => { const t0 = ev.touches[0]; tx = $("#modal").innerHTML || ev.target.closest(".seg,.strip,input,textarea,select,.score") ? null : { x: t0.clientX, y: t0.clientY }; }, { passive: true });
+document.addEventListener("touchend", ev => {
+  if (!tx || !["today", "chores", "week"].includes(tab)) return; const t1 = ev.changedTouches[0], dx = t1.clientX - tx.x, dy = t1.clientY - tx.y; tx = null;
+  if (Math.abs(dx) < 70 || Math.abs(dy) > Math.abs(dx) * 0.6) return;
+  sel = addD(sel, (dx < 0 ? 1 : -1) * (tab === "week" ? 7 : 1)); render();
+}, { passive: true });
+let lastDay = todayK();
 boot();
 if (!me) setTimeout(() => { if (!me) whoSheet(); }, 300);
-setInterval(() => { const ae = document.activeElement; if (tab === "today" && !$("#modal").innerHTML && !(ae && /INPUT|TEXTAREA|SELECT/.test(ae.tagName))) render(); }, 60000);
+setInterval(() => { if (todayK() !== lastDay) { if (sel === lastDay) sel = todayK(); lastDay = todayK(); } const ae = document.activeElement; if (tab === "today" && !$("#modal").innerHTML && !(ae && /INPUT|TEXTAREA|SELECT/.test(ae.tagName))) render(); }, 60000);
 }
 </script>
 </body>
