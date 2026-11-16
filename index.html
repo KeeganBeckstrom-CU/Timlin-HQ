@@ -507,7 +507,7 @@ function upcomingLegs(n) {
 }
 function legBtn(l, bad) {
   const canTake = me && drivers().includes(me) && !l.driver;
-  const who = l.driver ? `${esc(l.driver)} ${av(l.driver, "sm")}` : `<span class="need">Needs a driver</span>`;
+  const who = l.driver ? (FAM.includes(l.driver) ? `${esc(l.driver)} ${av(l.driver, "sm")}` : `<span>${esc(l.driver)} <small style="color:var(--mute)">friend</small></span>`) : `<span class="need">Needs a driver</span>`;
   const line = l.k === "to"
     ? `Leave ${fm(l.depart)} → there ${fm(l.arrive)} · home ${fm(l.home)}`
     : `Leave ${fm(l.depart)} → pick up ${fm(l.arrive)} · home ${fm(l.home)}`;
@@ -704,7 +704,7 @@ function editSheet(id, d) {
 }
 function drawForm() {
   const f = form, dr = drivers(), tms = teams(), rideOpt = [["none", "No ride"], ["to", "Drop-off"], ["from", "Pick-up"], ["both", "Both ways"]];
-  const drvSel = (name, v) => `<select id="${name}"><option value="">Needs a driver</option>${dr.map(n => `<option ${v === n ? "selected" : ""}>${n}</option>`).join("")}${lockedDrivers().map(n => `<option disabled>${n} — can drive ${lockLabel(n)}</option>`).join("")}</select>`;
+  const drvSel = (name, v) => { const custom = v === "__custom" || (v && !FAM.includes(v)); return `<select id="${name}"><option value="">Needs a driver</option>${dr.map(n => `<option ${v === n ? "selected" : ""}>${n}</option>`).join("")}${lockedDrivers().map(n => `<option disabled>${n} — can drive ${lockLabel(n)}</option>`).join("")}<option value="__custom" ${custom ? "selected" : ""}>Someone else (friend)…</option></select>${custom ? `<input type="text" id="${name}c" style="margin-top:6px" placeholder="Who's driving? e.g. Tyler's mom" value="${v === "__custom" ? "" : esc(v)}">` : ""}`; };
   const tm = tms[f.team];
   sheet(`<h3>${f._id ? "Edit" : "Add to the schedule"}</h3>
   <div class="f"><label for="fT">What</label><input type="text" id="fT" value="${esc(f.title)}" placeholder="Baseball practice, work, dentist…"></div>
@@ -733,7 +733,8 @@ function grab() {
   f.title = v("fT") ?? f.title; f.cat = v("fC") ?? f.cat; f.repeat = v("fR") ?? f.repeat; f.date = v("fD") || f.date;
   if (v("fU") !== undefined) f.until = v("fU"); f.start = v("fS") ?? f.start; f.end = v("fE") ?? f.end; f.place = (v("fP") ?? f.place).trim();
   f.travel = v("fTr") ?? f.travel; f.early = v("fEa") ?? f.early; f.team = v("fTeam") ?? f.team;
-  f.ride = v("fRide") ?? f.ride; if (v("fDT") !== undefined) f.driverTo = v("fDT"); if (v("fDF") !== undefined) f.driverFrom = v("fDF");
+  f.ride = v("fRide") ?? f.ride; const cv = n => v(n) === "__custom" ? ((v(n + "c") ?? "").trim() || "__custom") : v(n);
+  if (v("fDT") !== undefined) f.driverTo = cv("fDT"); if (v("fDF") !== undefined) f.driverFrom = cv("fDF");
   f.notes = v("fN") ?? f.notes;
 }
 function legSheet(id, d, k) {
@@ -741,6 +742,7 @@ function legSheet(id, d, k) {
   const l = legsOf({ id, e, d }).find(x => x.k === k); if (!l) return;
   sheet(`<h3>${k === "to" ? "Drop-off" : "Pick-up"} · leave ${plainM(l.depart)}</h3><p class="sub">${esc(e.title)} · ${(e.who || []).join(", ")} · ${dayLabel(d)}<br>${k === "to" ? `There by ${plainM(l.arrive)}` : `Pick up at ${plainM(l.arrive)}`} · back home ${plainM(l.home)}${e.place ? "<br>" + esc(e.place) : ""}</p>
   <div class="f"><span class="lb">Who's driving${e.repeat === "weekly" ? " this day" : ""}?</span><div class="who">${drivers().map(n => `<button data-setdrv="${id}|${d}|${k}|${n}" style="${l.driver === n ? "box-shadow:inset 0 0 0 2px var(--ink)" : ""}">${av(n)}${n}</button>`).join("")}${lockedDrivers().map(n => `<button disabled class="lockd">${av(n)}<span>${n}<small style="display:block;margin:0">Can drive ${lockLabel(n)}</small></span></button>`).join("")}</div></div>
+  <div class="f"><label for="cdrv">Friend or someone else driving</label><div class="add" style="margin:0"><input type="text" id="cdrv" placeholder="Tyler's mom, Coach Mike…" value="${l.driver && !FAM.includes(l.driver) ? esc(l.driver) : ""}"><button class="btn" data-setcustom="${id}|${d}|${k}">Set</button></div></div>
   <div class="acts">${l.driver ? `<button class="btn ghost" data-setdrv="${id}|${d}|${k}|">Nobody yet — needs a driver</button>` : ""}<button class="btn ghost" data-close>Done</button></div>`);
 }
 function setDriver(id, d, k, n) { const rk = id + "_" + d, cur = S.rides[rk] || {}; put("rides", rk, {...cur, [k]: n}); }
@@ -890,6 +892,7 @@ document.addEventListener("click", ev => {
   if (D.rf) { rideF = D.rf; render(); return; }
   if (D.ww) { weekWho = D.ww; render(); return; }
   if (D.leg) { const [id, d, k] = D.leg.split("|"); legSheet(id, d, k); return; }
+  if (D.setcustom) { const [id, d, k] = D.setcustom.split("|"), n = ($("#cdrv").value || "").replace(/\|/g, "/").trim(); if (n) { setDriver(id, d, k, n); close(); } return; }
   if (D.setdrv !== undefined) { const [id, d, k, n] = D.setdrv.split("|"); setDriver(id, d, k, n); close(); return; }
   if (D.edit) { const [id, d] = D.edit.split("|"); editSheet(id, d); return; }
   if (D.add !== undefined) { editSheet(null, sel); return; }
@@ -945,6 +948,7 @@ document.addEventListener("click", ev => {
     if (!f.title.trim() || !f.who.length || !f.start || (f.repeat === "weekly" && !f.days.length)) { $("#fErr").classList.remove("hide"); return; }
     const id = f._id || uid("e"), out = {...f, title: f.title.trim(), travel: f.travel === "" ? "" : +f.travel, early: f.early === "" ? "" : +f.early};
     delete out._id; delete out._d; delete out._auto; delete out.leave;
+    if (out.driverTo === "__custom") out.driverTo = ""; if (out.driverFrom === "__custom") out.driverFrom = "";
     if (out.ride === "none" || out.ride === "from") out.driverTo = "";
     if (out.ride === "none" || out.ride === "to") out.driverFrom = "";
     if (out.repeat !== "weekly") { out.days = []; out.until = ""; }
@@ -958,7 +962,7 @@ document.addEventListener("click", ev => {
 document.addEventListener("change", async ev => {
   const id = ev.target.id;
   if (cform && id === "cR") { grabChore(); drawChore(); }
-  if (form && ["fR", "fRide", "fTeam", "fC"].includes(id)) { if (id === "fTeam") form._auto = false; grab(); if (id === "fC" && form._auto) form.team = autoTeam(form); drawForm(); }
+  if (form && ["fR", "fRide", "fTeam", "fC", "fDT", "fDF"].includes(id)) { if (id === "fTeam") form._auto = false; grab(); if (id === "fC" && form._auto) form.team = autoTeam(form); drawForm(); }
   if (id === "appLogo" && ev.target.files[0]) {
     try { const lg = await processLogo(ev.target.files[0], true); put("settings", "main", {...main(), logo: lg}); } catch (e) { flash("Couldn't read that image"); }
   }
