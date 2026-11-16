@@ -36,7 +36,7 @@ header{position:sticky;top:0;z-index:5;background:color-mix(in srgb,var(--bg) 82
 .hrow{max-width:760px;margin:0 auto;display:flex;align-items:center;gap:10px}
 .brand{font-weight:800;font-size:19px;letter-spacing:-.02em;flex:1;display:flex;align-items:center;gap:10px;white-space:nowrap}
 .brand b{background:var(--grad);-webkit-background-clip:text;background-clip:text;color:transparent}
-.mark{width:36px;height:36px;flex:none;display:grid;place-items:center;border-radius:12px;overflow:hidden;background:var(--grad);color:#fff;font-weight:800;font-size:18px;box-shadow:0 6px 16px rgba(61,107,255,.38)}
+.mark{width:38px;height:38px;flex:none;display:grid;place-items:center;border-radius:11px;overflow:hidden;background:#0e0f12;box-shadow:0 0 0 1px var(--line),0 6px 16px rgba(61,107,255,.3)}
 .mark img{width:100%;height:100%;object-fit:contain}
 .sync{font-size:13px;color:var(--mute);display:flex;align-items:center;gap:6px;white-space:nowrap}
 .sync b{width:8px;height:8px;border-radius:50%;background:var(--warn)}.sync.live b{background:var(--ok);box-shadow:0 0 0 4px color-mix(in srgb,var(--ok) 25%,transparent)}
@@ -447,7 +447,7 @@ function weekPoints(k) {
 // ---------- views ----------
 function render() {
   TM = null;
-  const mk = $("#mark"), lg = main().logo; mk.innerHTML = lg ? `<img src="${lg}" alt="">` : "T";
+  const mk = $("#mark"), lg = main().logo; mk.innerHTML = lg ? `<img src="${lg}" alt="">` : `<svg viewBox="0 0 100 100" width="100%" height="100%" aria-hidden="true"><defs><linearGradient id="mkg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#3d6bff"/><stop offset="1" stop-color="#21c2ff"/></linearGradient></defs><rect width="100" height="100" fill="#0e0f12"/><path d="M22 50 L50 26 L78 50" fill="none" stroke="url(#mkg)" stroke-width="7" stroke-linecap="round" stroke-linejoin="round"/><path d="M30 45 V76 H70 V45" fill="none" stroke="url(#mkg)" stroke-width="7" stroke-linecap="round" stroke-linejoin="round"/><path d="M50 72 C50 72 39 61 39 54 A11 11 0 0 1 61 54 C61 61 50 72 50 72 Z" fill="#f5f3ef"/><circle cx="50" cy="54" r="4.2" fill="#0e0f12"/></svg>`;
   const meB = $("#meBtn");
   meB.innerHTML = me ? `<span class="nm">${esc(me)}</span> ${av(me)}` : "Who are you?";
   document.querySelectorAll("#tabs button").forEach(b => b.classList.toggle("on", b.dataset.t === tab));
