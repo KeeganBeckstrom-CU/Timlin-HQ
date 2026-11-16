@@ -568,8 +568,6 @@ function vToday() {
   }
   const ch = choresOn(sel);
   if (ch.length) { const log = S.chorelog[sel] || {}; h += `<h2>Chores <small>${ch.filter(x => log[x.key]).length} of ${ch.length} done</small></h2>` + choreList(sel, ch); }
-  const dn = S.dinner[sel] || {}, eat = FAM.filter(x => dn[x] === "home" || dn[x] === "late").length;
-  h += `<h2>Dinner ${isToday ? "tonight" : ""} <small>${eat} eating</small></h2>` + dinner(sel);
   return h;
 }
 function emptyStart() {
