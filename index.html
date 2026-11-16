@@ -256,7 +256,11 @@ const SPORTY = ["Practice","Game","Tournament","Lift","Lesson"];
 const EARLY = {Game:45,Tournament:60,Practice:15,Lift:10,Lesson:10,School:10,Work:10,Appointment:10,Event:15,Other:10};
 const DOW = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
 const MON = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
-const S = {events:{},rides:{},grocery:{},notes:{},dinner:{},settings:{},teams:{},chores:{},chorelog:{}};
+const S = {events:{},rides:{},grocery:{},notes:{},dinner:{},settings:{},teams:{},chores:{},chorelog:{},devices:{},plans:{}};
+const loaded = {};
+const ADMIN = "Keegan";
+let devId = null; try { devId = localStorage.getItem("bhq-dev"); if (!devId) { devId = "d" + Date.now().toString(36) + Math.random().toString(36).slice(2, 8); localStorage.setItem("bhq-dev", devId); } } catch (e) { devId = "d-temp"; }
+const devLabel = () => { const u = navigator.userAgent; const k = /iPhone/.test(u) ? "iPhone" : /iPad/.test(u) ? "iPad" : /Android/.test(u) ? "Android phone" : /Macintosh/.test(u) ? "Mac" : /Windows/.test(u) ? "Windows PC" : "Device"; const b = /CriOS|Chrome/.test(u) ? "Chrome" : /Safari/.test(u) ? "Safari" : /Firefox/.test(u) ? "Firefox" : ""; return k + (b ? " · " + b : ""); };
 const COLLS = Object.keys(S);
 let api = null, live = false, TM = null;
 let me = null; try { me = localStorage.getItem("bhq-me"); } catch (e) {}
@@ -336,8 +340,8 @@ async function claudeApi() {
   const timer = setTimeout(() => { if (!live) setSync(false, "Can't reach data yet"); }, 10000);
   COLLS.forEach(c => db.collection(c).onSnapshot(snap => {
     const o = {}; snap.docs.forEach(d => { o[d.id] = d.data(); }); S[c] = o;
-    if (!snap.metadata.fromCache) { clearTimeout(timer); setSync(true, "Live · shared"); }
-    render();
+    if (!snap.metadata.fromCache) { clearTimeout(timer); setSync(true, "Live · shared"); loaded[c] = true; }
+    checkDevice(); render();
   }, () => { clearTimeout(timer); setSync(false, "Offline"); }));
   return { put: (c, id, d) => db.collection(c).doc(id).set(d), del: (c, id) => db.collection(c).doc(id).delete() };
 }
@@ -349,7 +353,7 @@ async function supaApi() {
     if (error) throw error;
     COLLS.forEach(c => S[c] = {});
     data.forEach(r => { if (S[r.coll]) S[r.coll][r.id] = r.data; });
-    setSync(true, "Live · shared"); render();
+    setSync(true, "Live · shared"); COLLS.forEach(c => loaded[c] = true); checkDevice(); render();
   };
   await load();
   sb.channel("hub").on("postgres_changes", { event: "*", schema: "public", table: "hub" }, p => {
@@ -429,15 +433,49 @@ function choresOn(d) {
       continue;
     }
     if (c.rotate === "all") pool.forEach(n => out.push({ id, c, who: n, key: id + ":" + n }));
-    else {
-      const off = c.shift != null ? +c.shift : [...id].reduce((a, ch) => a + ch.charCodeAt(0), 0) + (c.order || 0);
-      const i = c.rotate === "fixed" ? 0 : ((c.rotate === "weekly" ? weekNum(d) : dayNum(d)) + off) % pool.length;
-      out.push({ id, c, who: pool[i], key: id });
-    }
+    else if (c.rotate === "fixed") out.push({ id, c, who: pool[0], key: id });
+    else out.push({ id, c, who: planWho(d, id, pool), key: id, auto: true });
   }
   return out.sort((a, b) => (a.c.order || 0) - (b.c.order || 0));
 }
-const rotLabel = { daily: "Take turns each day", weekly: "Take turns each week", fixed: "Same person every time", all: "Everyone does their own", rolling: "Everyone, once a week — next one set when done" };
+// ---- auto-scheduler: hands out each week's chores around everyone's calendar ----
+const wkStart = k => addD(k, -parse(k).getDay());
+let PLANC = {};
+function busyMins(n, d, from, to) {
+  let m = 0;
+  occ(d).forEach(o => { if (!(o.e.who || []).includes(n)) return; const { early, travel } = timing(o.e); const s0 = mins(o.e.start); if (s0 == null) return; const a = s0 - early - travel, b = (mins(o.e.end) ?? s0 + 60) + travel; m += Math.max(0, Math.min(b, to) - Math.max(a, from)); });
+  return m;
+}
+function buildPlan(ws) {
+  const a = {}, load = {}, cnt = {}, prev = (S.plans[addD(ws, -7)] || {}).a || {}, prevCnt = {};
+  Object.entries(prev).forEach(([k, n]) => { const id = k.split("|")[1]; prevCnt[id + n] = (prevCnt[id + n] || 0) + 1; });
+  const list = Object.entries(S.chores).filter(([, c]) => c && c.name && !["rolling", "all", "fixed"].includes(c.rotate)).sort((x, y) => (+y[1].pts || 1) - (+x[1].pts || 1));
+  const wn = weekNum(ws);
+  for (let i = 0; i < 7; i++) {
+    const d = addD(ws, i), dow = parse(d).getDay(), today = {};
+    list.forEach(([id, c]) => {
+      if (!(c.days || []).includes(dow)) return;
+      const pool = (c.pool || []).filter(n => FAM.includes(n)); if (!pool.length) return;
+      const evening = (c.days || []).length > 2 || /night|dinner|dish/i.test(c.name);
+      const score = n => {
+        const busy = evening ? busyMins(n, d, 16 * 60 + 30, 21 * 60) : busyMins(n, d, 9 * 60, 17 * 60);
+        return (busy > 30 ? 1000 : 0) + (cnt[id + n] || 0) * 40 + (prevCnt[id + n] || 0) * 6 + (load[n] || 0) * 2 + (today[n] || 0) * 15 + ((pool.indexOf(n) + wn + i) % pool.length) * 0.1;
+      };
+      const who = pool.slice().sort((x, y) => score(x) - score(y))[0];
+      a[d + "|" + id] = who; cnt[id + who] = (cnt[id + who] || 0) + 1; load[who] = (load[who] || 0) + (+c.pts || 1); today[who] = (today[who] || 0) + 1;
+    });
+  }
+  return a;
+}
+function planFor(ws) { const saved = (S.plans[ws] || {}).a; if (saved) return saved; return PLANC[ws] || (PLANC[ws] = buildPlan(ws)); }
+function planWho(d, id, pool) { const p = planFor(wkStart(d)), w = p[d + "|" + id]; if (w && pool.includes(w)) return w; const fresh = PLANC["f" + wkStart(d)] || (PLANC["f" + wkStart(d)] = buildPlan(wkStart(d))); return fresh[d + "|" + id] || pool[0]; }
+const savedPlan = {};
+function savePlans() {
+  if (!live || !loaded.plans || !loaded.chores || !loaded.events || !me) return;
+  const ws = wkStart(todayK());
+  [ws, addD(ws, 7)].forEach(w => { if (!S.plans[w] && !savedPlan[w] && Object.keys(S.chores).length) { savedPlan[w] = 1; put("plans", w, { a: buildPlan(w), ts: Date.now(), by: me }); } });
+}
+const rotLabel = { auto: "Auto-assigned around schedules", daily: "Auto-assigned around schedules", weekly: "Auto-assigned around schedules", fixed: "Same person every time", all: "Everyone does their own", rolling: "Everyone, once a week — next one set when done" };
 function weekPoints(k) {
   const start = addD(k, -parse(k).getDay()), pts = {};
   for (let i = 0; i < 7; i++) { const d = addD(start, i), log = S.chorelog[d] || {}; choresOn(d).forEach(x => { const r = log[x.key]; if (r) pts[r.by || x.who] = (pts[r.by || x.who] || 0) + (+x.c.pts || 1); }); }
@@ -446,7 +484,8 @@ function weekPoints(k) {
 
 // ---------- views ----------
 function render() {
-  TM = null;
+  TM = null; PLANC = {};
+  setTimeout(savePlans, 0);
   const mk = $("#mark"), lg = main().logo; mk.innerHTML = lg ? `<img src="${lg}" alt="">` : `<svg viewBox="0 0 100 100" width="100%" height="100%" aria-hidden="true"><defs><linearGradient id="mkg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#3d6bff"/><stop offset="1" stop-color="#21c2ff"/></linearGradient></defs><rect width="100" height="100" fill="#0e0f12"/><path d="M22 50 L50 26 L78 50" fill="none" stroke="url(#mkg)" stroke-width="7" stroke-linecap="round" stroke-linejoin="round"/><path d="M30 45 V76 H70 V45" fill="none" stroke="url(#mkg)" stroke-width="7" stroke-linecap="round" stroke-linejoin="round"/><path d="M50 72 C50 72 39 61 39 54 A11 11 0 0 1 61 54 C61 61 50 72 50 72 Z" fill="#f5f3ef"/><circle cx="50" cy="54" r="4.2" fill="#0e0f12"/></svg>`;
   const meB = $("#meBtn");
   meB.innerHTML = me ? `<span class="nm">${esc(me)}</span> ${av(me)}` : "Who are you?";
@@ -571,19 +610,21 @@ function choreList(d, ch) {
 }
 function scoreboard(k, all) {
   const start = addD(k, -parse(k).getDay()), pts = weekPoints(k), tot = {}, dn = {};
-  for (let i = 0; i < 7; i++) { const d = addD(start, i), log = S.chorelog[d] || {}; choresOn(d).forEach(x => { tot[x.who] = (tot[x.who] || 0) + 1; if (log[x.key]) dn[x.who] = (dn[x.who] || 0) + 1; }); }
+  const myDays = {};
+  for (let i = 0; i < 7; i++) { const d = addD(start, i), log = S.chorelog[d] || {}; choresOn(d).forEach(x => { tot[x.who] = (tot[x.who] || 0) + 1; if (log[x.key]) dn[x.who] = (dn[x.who] || 0) + 1; (myDays[x.who] = myDays[x.who] || new Set()).add(d); }); }
   const ppl = FAM.filter(n => all.some(([, c]) => (c.pool || []).includes(n)));
   const top = Math.max(0, ...ppl.map(n => pts[n] || 0));
   return `<div class="score">${ppl.map(n => { const p = tot[n] ? Math.round((dn[n] || 0) / tot[n] * 100) : 0, lead = top > 0 && (pts[n] || 0) === top;
-    return `<div class="sc ${lead ? "lead" : ""}" style="--c:${pc(n)}">${lead ? `<span class="crown">Leading</span>` : ""}<div class="ring" style="--p:${p}"><span>${av(n)}</span></div><b>${n}</b><div class="p">${pts[n] || 0}<small> pts</small></div><div class="d">${dn[n] || 0} of ${tot[n] || 0} this week</div></div>`; }).join("")}</div>`;
+    return `<div class="sc ${lead ? "lead" : ""}" style="--c:${pc(n)}">${lead ? `<span class="crown">Leading</span>` : ""}<div class="ring" style="--p:${p}"><span>${av(n)}</span></div><b>${n}</b><div class="p">${pts[n] || 0}<small> pts</small></div><div class="d">${dn[n] || 0} of ${tot[n] || 0} this week</div><div class="d" style="color:var(--ink)">${myDays[n] && myDays[n].size ? [...myDays[n]].sort().map(x => DOW[parse(x).getDay()]).join(" · ") : "—"}</div></div>`; }).join("")}</div><p class="ex">Chores are handed out automatically each week, around practices and games, with the dishwasher split evenly.</p>`;
 }
 function vChores() {
   const ch = choresOn(sel), log = S.chorelog[sel] || {}, all = Object.entries(S.chores).filter(([, c]) => c && c.name).sort((a, b) => (a[1].order || 0) - (b[1].order || 0));
   let h = `<h1>Chores</h1><p class="sub">${sel === todayK() ? "Today" : dayLabel(sel)} · ${ch.filter(x => log[x.key]).length} of ${ch.length} done</p>`;
   if (all.length) h += scoreboard(sel, all) + `<div style="height:14px"></div>`;
   h += strip(k => choresOn(k).length);
-  if (!all.length) return h + `<div class="empty"><b>No chores set up yet</b>Start with the house list for Grayson, Duggan and Decker — dishwasher turns, weekly laundry with a how-to, trash, bathroom and more. Edit anything after.<div class="acts" style="justify-content:center"><button class="btn acc" data-chpreset>Load suggested chores</button><button class="btn ghost" data-chadd>Add my own</button></div></div>`;
+  if (!all.length) return h + `<div class="empty"><b>No chores set up yet</b>Start with the house list for Grayson, Duggan and Decker: dishwasher + sink, weekly laundry with a how-to, Thursday-night trash and the bathroom. Days get handed out automatically. Edit anything after.<div class="acts" style="justify-content:center"><button class="btn acc" data-chpreset>Load suggested chores</button><button class="btn ghost" data-chadd>Add my own</button></div></div>`;
   h += ch.length ? choreList(sel, ch) : `<div class="empty"><b>No chores this day</b></div>`;
+  if (me === ADMIN) h += `<div class="acts"><button class="btn ghost" data-replan="${wkStart(sel)}">Re-plan this week around the latest schedule</button></div>`;
   h += `<h2>All chores</h2><div class="list">${all.map(([id, c]) => `<div class="li"><button class="x" data-ce="${id}"><b>${esc(c.name)}</b><span>${c.rotate === "rolling" ? "Once a week each · next: " + (c.pool || []).map(n => n + " " + (c.next && c.next[n] ? dayLabel(c.next[n]).replace(/^\w+, /, "") : "today")).join(", ") : ((c.days || []).length === 7 ? "Every day" : (c.days || []).map(i => DOW[i]).join(", ")) + " · " + (rotLabel[c.rotate] || "")}</span></button><span class="dots">${(c.pool || []).map(n => av(n, "sm")).join("")}</span></div>`).join("")}</div><div class="acts"><button class="btn ghost" data-chadd>Add a chore</button></div>`;
   return h;
 }
@@ -617,16 +658,39 @@ function vHouse() {
   <h2>Settings</h2><div class="set"><div class="f"><span class="lb">App logo</span><div class="lprev"><span class="mark" style="width:64px;height:64px;background:var(--card2)">${main().logo ? `<img src="${main().logo}" alt="">` : ""}</span><label class="file">${main().logo ? "Replace" : "Upload"} logo<input type="file" id="appLogo" accept="image/*"></label>${main().logo ? `<button class="btn ghost" data-applogox>Remove</button>` : ""}</div><p class="ex">Shows in the top-left on everyone's phone. White backgrounds are removed automatically.</p></div><div class="f"><span class="lb">Who can drive</span><div class="pick">${FAM.map(n => `<button data-drv="${n}" class="${dr.includes(n) ? "on" : ""}">${av(n)}${n}${dr.includes(n) && lockedNow(n) ? ` <span class="pts">locked</span>` : ""}</button>`).join("")}</div>${lockedDrivers().map(n => `<p class="ex"><b>${n}</b> is locked for now — he can start driving on ${lockLabel(n)}, ${parse(locks()[n]).getFullYear()}. He'll unlock by himself that day.</p>`).join("")}</div>
   ${pl.length ? `<div class="f"><span class="lb">Saved drive times from home</span><div class="list">${pl.map(([p, m]) => `<div class="li"><span class="x"><b>${esc(p)}</b></span><span class="pts">${m} min</span><button class="del" data-pd="${esc(p)}" aria-label="Forget">×</button></div>`).join("")}</div></div>` : ""}
   <p>${live ? "Connected — changes show up on everyone's phone." : "Saving on this phone only. Set up the shared database (see README) so everyone sees the same thing."}</p>
-  <div class="acts">${hasSample ? `<button class="btn ghost" data-clearsample>Remove example events</button>` : `<button class="btn ghost" data-sample>Load example week</button>`}<button class="btn ghost" data-whoami>Switch person</button></div></div>`;
+  <div class="acts">${hasSample ? `<button class="btn ghost" data-clearsample>Remove example events</button>` : `<button class="btn ghost" data-sample>Load example week</button>`}</div></div>${me === ADMIN ? devicesSection() : `<p class="ex" style="margin-top:14px">This phone is ${esc(me || "not set up")}'s. Only ${ADMIN} can reset profiles.</p>`}`;
+}
+function devicesSection() {
+  const list = Object.entries(S.devices).filter(([, d]) => d && d.who).sort((a, b) => FAM.indexOf(a[1].who) - FAM.indexOf(b[1].who) || b[1].ts - a[1].ts);
+  return `<h2>Devices &amp; profiles <small>only you see this</small></h2><div class="list">${list.length ? list.map(([id, d]) => `<div class="li">${av(d.who, "sm")}<span class="x"><b>${esc(d.who)}${id === devId ? " · this phone" : ""}</b><span>${esc(d.label || "Device")} · set up ${ago(d.ts)}${d.reset ? " · reset, waiting for them to pick again" : ""}</span></span>${d.reset ? `<button class="pts" data-devforget="${id}">Remove</button>` : id === devId ? "" : `<button class="how" data-devreset="${id}">Reset</button>`}</div>`).join("") : `<div class="li" style="color:var(--mute)">No phones set up yet. They show up here as each person picks their name.</div>`}</div>
+  <p class="ex">Reset sends that phone back to "Who's using this phone?" the next time it opens. Points, drives and chores stay with the person, not the phone.</p>
+  ${list.length > 1 ? `<div class="acts"><button class="btn ghost" data-devall>Reset every other phone</button></div>` : ""}`;
 }
 function ago(ts) { const m = Math.round((Date.now() - ts) / 60000); if (m < 1) return "just now"; if (m < 60) return m + "m ago"; const h = Math.round(m / 60); if (h < 24) return h + "h ago"; return Math.round(h / 24) + "d ago"; }
 
 // ---------- sheets ----------
 function sheet(html) { $("#modal").innerHTML = `<div class="scrim" id="scrim"><div class="sheet" role="dialog" aria-modal="true">${html}</div></div>`; }
-function close() { $("#modal").innerHTML = ""; form = tform = cform = null; }
+function close() { if (mustPick && !me) return; $("#modal").innerHTML = ""; form = tform = cform = null; }
+let mustPick = false;
+function claim(n) {
+  me = n; mustPick = false;
+  try { localStorage.setItem("bhq-me", n); } catch (e) {}
+  put("devices", devId, { who: n, label: devLabel(), ts: Date.now() });
+}
+function checkDevice() {
+  if (!live || !loaded.devices || !me) return;
+  const d = S.devices[devId];
+  if (!d) { claim(me); return; }               // first run after this update: register this phone
+  if (d.reset || d.who !== me) { me = null; try { localStorage.removeItem("bhq-me"); } catch (e) {} if (!$("#modal").innerHTML) whoSheet(); }
+}
 let flashT;
 function flash(msg) { setSync(live, msg); clearTimeout(flashT); flashT = setTimeout(() => setSync(live, live ? "Live · shared" : "This phone only"), 4000); }
-function whoSheet() { sheet(`<h3>Who's using this phone?</h3><p class="sub">So "I'll drive", chores and notes know it's you. You can switch anytime.</p><div class="who">${FAM.map(n => `<button data-iam="${n}">${av(n)}${n}</button>`).join("")}</div>`); }
+function whoSheet() {
+  if (me) { sheet(`<h3>This phone is ${esc(me)}'s</h3><div style="display:flex;align-items:center;gap:12px;margin-bottom:14px">${av(me)}<p class="sub" style="margin:0">Each phone stays with one person so drives, chores and points stay straight. If this is the wrong person, ask ${ADMIN} to reset it from House.</p></div><div class="acts"><button class="btn" data-close>Got it</button></div>`); return; }
+  mustPick = true;
+  const used = {}; Object.values(S.devices).forEach(d => { if (d && d.who && !d.reset) used[d.who] = (used[d.who] || 0) + 1; });
+  sheet(`<h3>Who's using this phone?</h3><p class="sub">Pick carefully — this phone stays yours. Only ${ADMIN} can reset it.</p><div class="who">${FAM.map(n => `<button data-iam="${n}">${av(n)}<span>${n}${used[n] ? `<small style="display:block;margin:0">on ${used[n]} device${used[n] > 1 ? "s" : ""}</small>` : ""}</span></button>`).join("")}</div>`);
+}
 
 let form = null;
 function autoTeam(f) { const p = pTeam(f.who[0]); return SPORTY.includes(f.cat) && p ? p[0] : ""; }
@@ -728,7 +792,7 @@ function processLogo(file, strip) {
 let cform = null;
 function choreSheet(id) {
   const c = id ? S.chores[id] : null;
-  cform = c ? JSON.parse(JSON.stringify(c)) : { name: "", tip: "", days: [0, 1, 2, 3, 4, 5, 6], pool: [...KIDS], rotate: "daily", pts: 2, order: Object.keys(S.chores).length };
+  cform = c ? JSON.parse(JSON.stringify(c)) : { name: "", tip: "", days: [0, 1, 2, 3, 4, 5, 6], pool: [...KIDS], rotate: "auto", pts: 2, order: Object.keys(S.chores).length };
   cform._id = id; drawChore();
 }
 function drawChore() {
@@ -738,7 +802,7 @@ function drawChore() {
   <div class="f"><label for="cT">What "done" means</label><input type="text" id="cT" value="${esc(c.tip)}" placeholder="Sink empty, counters wiped, dishwasher running"></div>
   ${c.rotate === "rolling" ? `<div class="f"><span class="lb">Next day for each person</span>${c.pool.map(n => `<div class="two" style="align-items:center;margin-bottom:6px"><span class="chip" style="--c:${pc(n)};--c2:${pc2(n)}">${av(n)}${n}</span><input type="date" data-cnx="${n}" value="${(c.next || {})[n] || todayK()}"></div>`).join("")}<p class="ex">When someone checks it off, their next one is set ${+c.every || 7} days later.</p></div>` : `<div class="f"><span class="lb">Which days</span><div class="pick days">${DOW.map((x, i) => `<button type="button" data-cd="${i}" class="${c.days.includes(i) ? "on" : ""}">${x}</button>`).join("")}</div></div>`}
   <div class="f"><span class="lb">Who's in the rotation</span><div class="pick">${FAM.map(n => `<button type="button" data-cp="${n}" class="${c.pool.includes(n) ? "on" : ""}">${av(n)}${n}</button>`).join("")}</div></div>
-  <div class="two"><div class="f"><label for="cR">How it's shared</label><select id="cR">${Object.entries(rotLabel).map(([k, l]) => `<option value="${k}" ${c.rotate === k ? "selected" : ""}>${l}</option>`).join("")}</select></div>
+  <div class="two"><div class="f"><label for="cR">How it's shared</label><select id="cR">${Object.entries(rotLabel).filter(([k]) => !["daily", "weekly"].includes(k) || c.rotate === k).map(([k, l]) => `<option value="${k}" ${c.rotate === k ? "selected" : ""}>${l}</option>`).join("")}</select></div>
   <div class="f"><label for="cP">Points</label><select id="cP">${[1, 2, 3, 4, 5].map(n => `<option ${+c.pts === n ? "selected" : ""}>${n}</option>`).join("")}</select></div></div>
   <p class="ex hide" id="cErr" style="color:var(--acc);font-weight:700">Add a name, at least one day and one person.</p>
   <div class="acts"><button class="btn acc" data-csave>Save chore</button><button class="btn ghost" data-close>Cancel</button></div>
@@ -805,14 +869,10 @@ const LAUNDRY_GUIDE = [
   ]}
 ];
 const CHORE_PRESET = [
-  { id: "c01", shift: 0, name: "Dishwasher + sink", tip: "Put away the clean dishes, then load everything in the sink and start it when full", days: [0, 1, 2, 3, 4, 5, 6], pool: KIDS, rotate: "daily", pts: 3 },
+  { id: "c01", shift: 0, name: "Dishwasher + sink", tip: "Put away the clean dishes, then load everything in the sink and start it when full", days: [0, 1, 2, 3, 4, 5, 6], pool: KIDS, rotate: "auto", pts: 3 },
   { id: "c04", name: "Your laundry", tip: "Wash, dry, fold and put away — tap How to for settings", pool: KIDS, rotate: "rolling", every: 7, pts: 3, steps: LAUNDRY_STEPS, guide: LAUNDRY_GUIDE },
-  { id: "c05", name: "Towels & sheets load", tip: "One load of bathroom towels or bed sheets, start to finish", days: [3], pool: KIDS, rotate: "weekly", pts: 3 },
-  { id: "c06", name: "Trash & recycling (Thursday night)", tip: "Empty every can in the house, then bins to the curb before bed", days: [4], pool: KIDS, rotate: "weekly", pts: 2 },
-  { id: "c07", name: "Clean the kids' bathroom", tip: "Toilet, sink, mirror, wipe the floor, new trash bag", days: [6], pool: KIDS, rotate: "weekly", pts: 4 },
-  { id: "c08", name: "Vacuum the main floor", tip: "Living room, kitchen, entryway — move the shoes", days: [6], pool: KIDS, rotate: "weekly", pts: 3 },
-  { id: "c10", name: "Shovel or yard work", tip: "Driveway and walk when it snows; leaves or mowing in season", days: [6], pool: KIDS, rotate: "weekly", pts: 4 },
-  { id: "c11", name: "Help cook dinner", tip: "Work with Mom or Dad start to finish", days: [4], pool: KIDS, rotate: "weekly", pts: 4 }
+  { id: "c06", name: "Trash & recycling (Thursday night)", tip: "Empty every can in the house, then bins to the curb before bed", days: [4], pool: KIDS, rotate: "auto", pts: 2 },
+  { id: "c07", name: "Clean the kids' bathroom", tip: "Toilet, sink, mirror, wipe the floor, new trash bag", days: [6], pool: KIDS, rotate: "auto", pts: 4 },
 ];
 function laundryStart() { const t = todayK(); return { Grayson: nextDow(t, 1), Duggan: nextDow(t, 3), Decker: nextDow(t, 5) }; }
 
@@ -837,7 +897,10 @@ document.addEventListener("click", ev => {
   if (D.sample !== undefined) { samples(); return; }
   if (D.clearsample !== undefined) { clearSamples(); return; }
   if (D.whoami !== undefined || t.id === "meBtn") { whoSheet(); return; }
-  if (D.iam) { me = D.iam; try { localStorage.setItem("bhq-me", me); } catch (e) {} close(); render(); return; }
+  if (D.devreset && me === ADMIN) { const d = S.devices[D.devreset]; if (d) put("devices", D.devreset, {...d, reset: true}); return; }
+  if (D.devforget && me === ADMIN) { del("devices", D.devforget); return; }
+  if (D.devall !== undefined && me === ADMIN) { if (t.dataset.sure) { Object.entries(S.devices).forEach(([id, d]) => { if (id !== devId && d && !d.reset) put("devices", id, {...d, reset: true}); }); return; } t.dataset.sure = "1"; t.textContent = "Tap again to reset every other phone"; return; }
+  if (D.iam) { if (!me) { claim(D.iam); } $("#modal").innerHTML = ""; render(); return; }
   if (D.din) { const doc = {...(S.dinner[sel] || {})}, nx = { "": "home", home: "late", late: "out", out: "" }; doc[D.din] = nx[doc[D.din] || ""]; if (!doc[D.din]) delete doc[D.din]; put("dinner", sel, doc); return; }
   if (D.gt) { const x = S.grocery[D.gt]; if (x) put("grocery", D.gt, {...x, done: !x.done}); return; }
   if (D.gd) { del("grocery", D.gd); return; }
@@ -856,6 +919,7 @@ document.addEventListener("click", ev => {
     put("chorelog", d, doc); return;
   }
   if (D.howto) { howSheet(D.howto); return; }
+  if (D.replan && me === ADMIN) { const w = D.replan, cur = S.plans[w]; const fresh = (delete S.plans[w], buildPlan(w)); if (cur) S.plans[w] = cur; const keep = {}; Object.entries((cur || {}).a || {}).forEach(([k, n]) => { const [d, id] = k.split("|"); if ((S.chorelog[d] || {})[id] || d < todayK()) keep[k] = n; }); put("plans", w, { a: {...fresh, ...keep}, ts: Date.now(), by: me }); flash("Chores re-planned"); return; }
   if (D.ce) { choreSheet(D.ce); return; }
   if (D.chadd !== undefined) { choreSheet(null); return; }
   if (D.chpreset !== undefined) { chorePreset(); return; }
@@ -916,7 +980,7 @@ document.addEventListener("submit", ev => {
 });
 
 boot();
-if (!me) setTimeout(whoSheet, 300);
+if (!me) setTimeout(() => { if (!me) whoSheet(); }, 300);
 setInterval(() => { const ae = document.activeElement; if (tab === "today" && !$("#modal").innerHTML && !(ae && /INPUT|TEXTAREA|SELECT/.test(ae.tagName))) render(); }, 60000);
 }
 </script>
